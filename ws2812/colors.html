@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Color Palette Maker</title>
+
+    <style>
+      body {
+        margin: 0;
+        font-family: sans-serif;
+      }
+      .app {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      .wrapper,
+      #values {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin: 0.5rem;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+      }
+      input,
+      button {
+        margin: 0.25rem;
+      }
+      input.error:not(:focus) {
+        outline: 1px solid red;
+      }
+      #output {
+        margin: 1rem;
+        height: 6rem;
+        width: 14rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="wrapper">
+        <h1>Color Palette Maker</h1>
+        <div>
+          <button id="add">+</button>
+        </div>
+        <div id="values"></div>
+        <div>
+          <label>Brightness</label>
+          <input type="range" id="brightness" min="0" max="1" step="0.05" value="1" />
+        </div>
+        <textarea id="output"></textarea>
+        <button id="copy">Copy</button>
+      </div>
+    </div>
+    <script>
+      colors = [];
+
+      function updateColors() {
+        colors = [];
+        Array.from(document.querySelectorAll('#values input[type="text"]')).forEach((i) => {
+          if (i.value.length === 7) colors.push(i.value);
+          i.classList.toggle('error', i.value.length !== 7);
+        });
+
+        colors.push(colors[0]);
+
+        const colorIcons = Array.from(document.querySelectorAll('#values input[type="color"]'));
+
+        output.value = '';
+
+        const b = brightness.value;
+        colors.forEach((color, i) => {
+          const c = hexToRgb(color);
+          if (c) {
+            const rgb = `${Math.floor(c.r * b)}, ${Math.floor(c.g * b)}, ${Math.floor(c.b * b)}`;
+            output.value += `[${(i / (colors.length - 1)).toFixed(2)}, [${rgb}]],${i < colors.length - 1 ? '\n' : ''}`;
+          }
+
+          if (i < colorIcons.length) colorIcons[i].value = color;
+        });
+      }
+
+      function hexToRgb(hex) {
+        var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result
+          ? {
+              r: parseInt(result[1], 16),
+              g: parseInt(result[2], 16),
+              b: parseInt(result[3], 16),
+            }
+          : null;
+      }
+
+      brightness.onchange = updateColors;
+
+      add.onclick = () => {
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const input = document.createElement('input');
+        input.placeholder = '# (Hex)';
+        input.type = 'text';
+        input.maxLength = 7;
+        input.onchange = (e) => {
+          if (e.target.value.indexOf('#') === -1) {
+            e.target.value = '#' + e.target.value.substring(0, 6);
+          }
+
+          updateColors();
+        };
+
+        const colorPicker = document.createElement('input');
+        colorPicker.type = 'color';
+        colorPicker.onchange = (e) => {
+          input.value = e.target.value;
+          updateColors();
+        };
+
+        const remove = document.createElement('button');
+        remove.innerText = '-';
+        remove.onclick = () => {
+          values.removeChild(row);
+          updateColors();
+        };
+
+        row.appendChild(colorPicker);
+        row.appendChild(input);
+        row.appendChild(remove);
+
+        values.appendChild(row);
+
+        updateColors();
+      };
+
+      copy.onclick = () => {
+        output.select();
+        document.execCommand('copy');
+      };
+
+      add.click();
+    </script>
+  </body>
+</html>
