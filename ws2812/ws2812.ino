@@ -14,7 +14,8 @@
 #define NUM_PIXELS 51
 //#define NUM_PIXELS 16
 
-#define SPECTRUM_MIN 60
+#define SPECTRUM_MIN 70
+#define SPECTRUM_THRESHOLD 350
 
 #define EEPROM_MODE_ADDRESS 0 // uint8_t
 #define EEPROM_COLOR_ADDRESS 1 // uint8_t
@@ -54,7 +55,7 @@ enum Mode {
 };
 
 // Default mode and color values
-#define defaultMode SPECTRUM
+#define defaultMode COLOR
 #define defaultColorHue 0
 #define defaultGradientIndex 0
 
@@ -73,6 +74,8 @@ uint8_t cycleCounter = 0;
 
 uint16_t lastAnalog = 0;
 uint8_t lastAmbient = 0;
+
+uint16_t avgDiff = SPECTRUM_THRESHOLD; // Instantly start spectrum 
 
 void setup() {
   TinyMegaI2C.init();
@@ -149,11 +152,37 @@ void updateSpectrum() {
 //  float fadeFactor = 0.05;
 //  float oldValue = 1. - fadeFactor;
 
-  TinyMegaI2C.start(8, 16);
+  TinyMegaI2C.start(8, 16 + 3 * 2);
+
+  int average = 0;
+  uint8_t values[16];
 
   for (i = 0; i < 16; i++) {
 //    spectrum[i] = max(100, (spectrum[i] * oldValue + TinyMegaI2C.read() * newValue) / 1000);
     uint8_t rawValue = TinyMegaI2C.read();
+    values[i] = rawValue;
+
+    average += rawValue;
+  }
+
+  uint16_t avgValue = TinyMegaI2C.read() << 8;
+  avgValue |= TinyMegaI2C.read();
+
+  uint16_t minSample = TinyMegaI2C.read() << 8;
+  minSample |= TinyMegaI2C.read();
+
+  uint16_t maxSample = TinyMegaI2C.read() << 8;
+  maxSample |= TinyMegaI2C.read();
+
+  uint16_t diff = maxSample - minSample;
+
+  float ratio = 0.005;
+  avgDiff = (1 - ratio) * avgDiff + ratio * diff;
+
+  Serial.println("avgDiff:" + String(avgDiff) + ",min:" + String(minSample) + ",max:" + String(maxSample) + ",diff:" + String(diff) + ",thresh:" + String(SPECTRUM_THRESHOLD));
+
+  for (i = 0; i < 16; i++) {
+    uint8_t rawValue = values[i];
 //    uint8_t readValue = min(rawValue > 4 ? rawValue * amp : 1, 255);
 //
 ////    spectrum[i] = max(100, floor(spectrum[i] * oldValue + readValue));
@@ -164,22 +193,31 @@ void updateSpectrum() {
 //      spectrum[i] -= 5;
 //    }
 
-    uint8_t final = rawValue * 16;
-    int8_t modifier = 0;
+//    uint8_t final = min(rawValue * 32, 255);
+    uint8_t final = map(rawValue, 1, 10, SPECTRUM_MIN, 255);
 
-    if (final > spectrum[i]) {
-      modifier = 20;
-    } else if (final > SPECTRUM_MIN) {
-      modifier = -8;
-    }
+//    if (average < 30) final = map(rawValue, 1, 16, SPECTRUM_MIN, 128);
+    
+//    int8_t modifier = 0;
 
-    spectrum[i] = constrain(spectrum[i] + modifier, SPECTRUM_MIN, 255);
+//    if (final > spectrum[i]) {
+//      modifier = 30;
+//    } else if (final > SPECTRUM_MIN) {
+//      modifier = -10;
+//    }
 
-//    if (SERIAL_DEBUG) Serial.print(String(i) + ": " + String(rawValue) + "\t");
+//    spectrum[i] = constrain(spectrum[i] + modifier, SPECTRUM_MIN, 255);
+
+      float mixFactor = 0.1;
+      spectrum[i] = max(SPECTRUM_MIN, mixFactor * final + (1 - mixFactor) * spectrum[i]);
+
+//    if (SERIAL_DEBUG) Serial.print(String(i) + ": " + String(spectrum[i]) + "\t");
 //    if (SERIAL_DEBUG) Serial.print(String(i) + ", " + String(readValue) + ", " + String(oldValue) + ", " + String(spectrum[i]) + "\t");
   }
 
 //  if (SERIAL_DEBUG) Serial.println();
+
+//  Serial.println(average);
 
   TinyMegaI2C.stop();
 }
@@ -238,9 +276,14 @@ void updateColor(uint8_t i) {
   
   if (currentMode == SPECTRUM) {
     uint8_t spectrumIndex = map(i, 0, NUM_PIXELS, 0, 14);
-    value = spectrum[spectrumIndex];
 
-    if (NUM_PIXELS > 80) {
+    if (avgDiff > SPECTRUM_THRESHOLD) {
+      value = spectrum[spectrumIndex];
+    } else {
+      value = SPECTRUM_MIN;
+    }
+    
+    if (NUM_PIXELS > 15) {
       uint8_t minIndex = spectrumMapping[spectrumIndex];
       uint8_t maxIndex = spectrumMapping[min(spectrumIndex + 1, 15)];
       
@@ -254,10 +297,10 @@ void updateColor(uint8_t i) {
 //        break;
 //      }
 //
-      value = map(i, minIndex, maxIndex, spectrum[spectrumIndex], spectrum[spectrumIndex + 1]);
+//      value = map(i, minIndex, maxIndex, spectrum[spectrumIndex], spectrum[spectrumIndex + 1]);
 
-//      if (i < 10) {
-//        Serial.print(String(i) + ": [" + String(spectrum[spectrumIndex]) + ", " + String(spectrum[spectrumIndex + 1]) + "] -> " + String(value));
+//      if (i < 20) {
+//        Serial.println(String(i) + "(" + String(spectrumIndex) + "): [" + String(spectrum[spectrumIndex]) + ", " + String(spectrum[spectrumIndex + 1]) + "] -> " + String(value));
 //      }
     }
   }
@@ -306,7 +349,7 @@ void loop() {
   diff = millis() - start;
   if (currentMode == SPECTRUM) {
     if (diff < 50) delay(50 - diff);
-  } else if (diff < 15) {
-    delay(15 - diff);
+  } else {
+    if (diff < 15) delay(15 - diff);
   }
 }
