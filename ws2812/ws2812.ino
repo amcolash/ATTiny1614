@@ -1,17 +1,26 @@
 #include <EEPROM.h>
+#include <Throttle.h>
 #include "TinyMegaI2CMaster.h"
 #include <tinyNeoPixel_Static.h>
 
 #define LED_PIN PIN_PA6
-#define BUTTON_PIN PIN_PA5
+
+#define POWER_BUTTON_PIN PIN_PA3
+#define MODE_BUTTON_PIN PIN_PA2
+#define COLOR_BUTTON_PIN PIN_PA1
+
+Throttle powerButton = Throttle(POWER_BUTTON_PIN, INPUT_PULLUP);
+Throttle modeButton = Throttle(MODE_BUTTON_PIN, INPUT_PULLUP);
+Throttle colorButton = Throttle(COLOR_BUTTON_PIN, INPUT_PULLUP);
+
 #define BRIGHTNESS_PIN PIN_PA2
 
 #define DEBUG false
 #define SERIAL_DEBUG true
 
 #define MAX_BRIGHTNESS 150
-//#define NUM_PIXELS 9
-#define NUM_PIXELS 51
+#define NUM_PIXELS 9
+//#define NUM_PIXELS 51
 //#define NUM_PIXELS 16
 
 #define SPECTRUM_MIN 70
@@ -81,7 +90,6 @@ void setup() {
   TinyMegaI2C.init();
   
   pinMode(LED_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT);
   
   if (SERIAL_DEBUG) Serial.begin(19200);
 
@@ -222,32 +230,88 @@ void updateSpectrum() {
   TinyMegaI2C.stop();
 }
 
-void checkButton() {
-  uint16_t buttonValue = analogRead(BUTTON_PIN);
+void handlePower() {
+  on = !on;
+}
 
-  if (abs(lastAnalog - buttonValue) > 20) {
-    if (buttonValue > 500) { // Color
-      on = true;
+void handleMode() {
+  on = true;
+  cycle = 0;
+  currentMode = (currentMode + 1) % MODE_LENGTH;
+  
+  EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
+}
 
-      if (currentMode == COLOR) {
-        currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
-        EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
-      } else {
-        currentGradientIndex = (currentGradientIndex + GRADIENT_SIZE * 2) % (sizeof(GRADIENTS) / 2);
-        EEPROM.put(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
-      }
-    } else if (buttonValue > 250) { // Mode
-      on = true;
-      cycle = 0;
-      currentMode = (currentMode + 1) % MODE_LENGTH;
-      
-      EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
-    } else if (buttonValue > 100) { // On / Off
-      on = !on;
-    }
+void handleColor() {
+  on = true;
+
+  if (currentMode == COLOR) {
+    currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
+    EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
+  } else {
+    currentGradientIndex = (currentGradientIndex + GRADIENT_SIZE * 2) % (sizeof(GRADIENTS) / 2);
+    EEPROM.put(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
+  }
+}
+
+//void checkButton() {
+//  uint16_t buttonValue = analogRead(BUTTON_PIN);
+//
+//  if (abs(lastAnalog - buttonValue) > 20) {
+//    if (buttonValue > 500) { // Color
+//      on = true;
+//
+//      if (currentMode == COLOR) {
+//        currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
+//        EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
+//      } else {
+//        currentGradientIndex = (currentGradientIndex + GRADIENT_SIZE * 2) % (sizeof(GRADIENTS) / 2);
+//        EEPROM.put(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
+//      }
+//    } else if (buttonValue > 250) { // Mode
+//      on = true;
+//      cycle = 0;
+//      currentMode = (currentMode + 1) % MODE_LENGTH;
+//      
+//      EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
+//    } else if (buttonValue > 100) { // On / Off
+//      on = !on;
+//    }
+//  }
+//
+//  lastAnalog = buttonValue;
+//}
+
+void checkButtons() {
+  powerButton.update();
+  modeButton.update();
+  colorButton.update();
+
+  
+  if (powerButton.fell()) {
+    on = !on;
   }
 
-  lastAnalog = buttonValue;
+  
+  if (modeButton.fell()) {
+    on = true;
+    cycle = 0;
+    currentMode = (currentMode + 1) % MODE_LENGTH;
+    
+    EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
+  }
+  
+  if (colorButton.fell()) {
+    on = true;
+
+    if (currentMode == COLOR) {
+      currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
+      EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
+    } else {
+      currentGradientIndex = (currentGradientIndex + GRADIENT_SIZE * 2) % (sizeof(GRADIENTS) / 2);
+      EEPROM.put(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
+    }
+  }
 }
 
 void checkBrightness() {
@@ -325,7 +389,8 @@ void loop() {
 
   start = millis();
 
-  checkButton();
+//  checkButton();
+  checkButtons();
   checkBrightness();
 
   if (on) {
