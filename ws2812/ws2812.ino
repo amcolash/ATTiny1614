@@ -81,10 +81,13 @@ uint8_t spectrumMapping[16];
 uint16_t cycle = 0;
 uint8_t cycleCounter = 0;
 
-uint16_t lastAnalog = 0;
-uint8_t lastAmbient = 0;
+uint8_t brightness = 255;
+int brightnessSpeed = -1;
+bool firstUpdate = true;
 
 uint16_t avgDiff = SPECTRUM_THRESHOLD; // Instantly start spectrum 
+
+unsigned long startTime, timeDiff;
 
 void setup() {
   TinyMegaI2C.init();
@@ -137,6 +140,8 @@ void setup() {
   leds.show();
   delay(300);
 
+  leds.setBrightness(min(MAX_BRIGHTNESS, brightness));
+
   EEPROM.get(EEPROM_MODE_ADDRESS, currentMode);
   if (currentMode == 255) currentMode = defaultMode;
   
@@ -150,15 +155,7 @@ void setup() {
 }
 
 void updateSpectrum() {
-//  const uint8_t amp = 25;
-//  const uint8_t fadeFactor = 15;
-//
-//  uint16_t oldValue = 1000 - fadeFactor;
-//  uint16_t newValue = fadeFactor * amp;
-
   float amp = 15;
-//  float fadeFactor = 0.05;
-//  float oldValue = 1. - fadeFactor;
 
   TinyMegaI2C.start(8, 16 + 3 * 2);
 
@@ -187,112 +184,45 @@ void updateSpectrum() {
   float ratio = 0.005;
   avgDiff = (1 - ratio) * avgDiff + ratio * diff;
 
-  Serial.println("avgDiff:" + String(avgDiff) + ",min:" + String(minSample) + ",max:" + String(maxSample) + ",diff:" + String(diff) + ",thresh:" + String(SPECTRUM_THRESHOLD));
+  if (SERIAL_DEBUG) Serial.println("avgDiff:" + String(avgDiff) + ",min:" + String(minSample) + ",max:" + String(maxSample) + ",diff:" + String(diff) + ",thresh:" + String(SPECTRUM_THRESHOLD));
 
+  float mixFactor = 0.1;
+  
   for (i = 0; i < 16; i++) {
     uint8_t rawValue = values[i];
-//    uint8_t readValue = min(rawValue > 4 ? rawValue * amp : 1, 255);
-//
-////    spectrum[i] = max(100, floor(spectrum[i] * oldValue + readValue));
-//
-//    if (readValue > spectrum[i]) {
-//      spectrum[i] += 30;
-//    } else {
-//      spectrum[i] -= 5;
-//    }
-
-//    uint8_t final = min(rawValue * 32, 255);
     uint8_t final = map(rawValue, 1, 10, SPECTRUM_MIN, 255);
 
-//    if (average < 30) final = map(rawValue, 1, 16, SPECTRUM_MIN, 128);
-    
-//    int8_t modifier = 0;
-
-//    if (final > spectrum[i]) {
-//      modifier = 30;
-//    } else if (final > SPECTRUM_MIN) {
-//      modifier = -10;
-//    }
-
-//    spectrum[i] = constrain(spectrum[i] + modifier, SPECTRUM_MIN, 255);
-
-      float mixFactor = 0.1;
-      spectrum[i] = max(SPECTRUM_MIN, mixFactor * final + (1 - mixFactor) * spectrum[i]);
+    spectrum[i] = max(SPECTRUM_MIN, mixFactor * final + (1 - mixFactor) * spectrum[i]);
 
 //    if (SERIAL_DEBUG) Serial.print(String(i) + ": " + String(spectrum[i]) + "\t");
 //    if (SERIAL_DEBUG) Serial.print(String(i) + ", " + String(readValue) + ", " + String(oldValue) + ", " + String(spectrum[i]) + "\t");
   }
 
 //  if (SERIAL_DEBUG) Serial.println();
-
 //  Serial.println(average);
 
   TinyMegaI2C.stop();
 }
 
 void handlePower() {
-  on = !on;
+  if (powerButton.rose() && powerButton.duration() < 500) {
+    on = !on;
+  } else if (powerButton.rose()) {
+    leds.setPixelColor(0, 0, 255, 255);
+    // TODO: Save brightness to eeprom
+  } else if ((!digitalRead(POWER_BUTTON_PIN) || powerButton.fell()) && powerButton.duration() > 1500) {
+    leds.setPixelColor(0, 255, 255, 0);
+    
+    brightness = constrain(brightness + brightnessSpeed, 0, MAX_BRIGHTNESS);
+    if (brightness == 0 || brightness == MAX_BRIGHTNESS) brightnessSpeed *= -1;
+    
+    leds.setBrightness(min(MAX_BRIGHTNESS, brightness));
+  } else if (!digitalRead(POWER_BUTTON_PIN) || powerButton.fell()) {
+    leds.setPixelColor(0, 0, 0, 255);
+  }
 }
 
 void handleMode() {
-  on = true;
-  cycle = 0;
-  currentMode = (currentMode + 1) % MODE_LENGTH;
-  
-  EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
-}
-
-void handleColor() {
-  on = true;
-
-  if (currentMode == COLOR) {
-    currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
-    EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
-  } else {
-    currentGradientIndex = (currentGradientIndex + GRADIENT_SIZE * 2) % (sizeof(GRADIENTS) / 2);
-    EEPROM.put(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
-  }
-}
-
-//void checkButton() {
-//  uint16_t buttonValue = analogRead(BUTTON_PIN);
-//
-//  if (abs(lastAnalog - buttonValue) > 20) {
-//    if (buttonValue > 500) { // Color
-//      on = true;
-//
-//      if (currentMode == COLOR) {
-//        currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
-//        EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
-//      } else {
-//        currentGradientIndex = (currentGradientIndex + GRADIENT_SIZE * 2) % (sizeof(GRADIENTS) / 2);
-//        EEPROM.put(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
-//      }
-//    } else if (buttonValue > 250) { // Mode
-//      on = true;
-//      cycle = 0;
-//      currentMode = (currentMode + 1) % MODE_LENGTH;
-//      
-//      EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
-//    } else if (buttonValue > 100) { // On / Off
-//      on = !on;
-//    }
-//  }
-//
-//  lastAnalog = buttonValue;
-//}
-
-void checkButtons() {
-  powerButton.update();
-  modeButton.update();
-  colorButton.update();
-
-  
-  if (powerButton.fell()) {
-    on = !on;
-  }
-
-  
   if (modeButton.fell()) {
     on = true;
     cycle = 0;
@@ -300,10 +230,12 @@ void checkButtons() {
     
     EEPROM.put(EEPROM_MODE_ADDRESS, currentMode);
   }
-  
+}
+
+void handleColor() {
   if (colorButton.fell()) {
     on = true;
-
+  
     if (currentMode == COLOR) {
       currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
       EEPROM.put(EEPROM_COLOR_ADDRESS, currentColorHue);
@@ -314,12 +246,19 @@ void checkButtons() {
   }
 }
 
-void checkBrightness() {
-  uint8_t ambient = analogRead(BRIGHTNESS_PIN) >> 4;
-  if (abs(ambient - lastAmbient) > 1) {
-    leds.setBrightness(min(MAX_BRIGHTNESS, ambient));
-    lastAmbient = ambient;
+void checkButtons() {
+  powerButton.update();
+  modeButton.update();
+  colorButton.update();
+
+  // Don't cause weird behavior on boot
+  if (!firstUpdate) {
+    handlePower();  
+    handleMode();
+    handleColor();
   }
+  
+  firstUpdate = false;
 }
 
 void updateCycle() {
@@ -346,27 +285,6 @@ void updateColor(uint8_t i) {
     } else {
       value = SPECTRUM_MIN;
     }
-    
-    if (NUM_PIXELS > 15) {
-      uint8_t minIndex = spectrumMapping[spectrumIndex];
-      uint8_t maxIndex = spectrumMapping[min(spectrumIndex + 1, 15)];
-      
-//      for (j = 0; j < NUM_PIXELS; j++) {
-//        if (map(j, 0, NUM_PIXELS, 0, 14) == spectrumIndex) minIndex = j;
-//        break;
-//      }
-//  
-//      for (j = minIndex; j < NUM_PIXELS; j++) {
-//        if (map(j, 0, NUM_PIXELS, 0, 14) == spectrumIndex + 1) maxIndex = j;
-//        break;
-//      }
-//
-//      value = map(i, minIndex, maxIndex, spectrum[spectrumIndex], spectrum[spectrumIndex + 1]);
-
-//      if (i < 20) {
-//        Serial.println(String(i) + "(" + String(spectrumIndex) + "): [" + String(spectrum[spectrumIndex]) + ", " + String(spectrum[spectrumIndex + 1]) + "] -> " + String(value));
-//      }
-    }
   }
   
   uint8_t iCycle = (i + cycle) % NUM_PIXELS;
@@ -381,21 +299,10 @@ void updateColor(uint8_t i) {
   leds.setPixelColor(i, leds.ColorHSV(hue, sat, value));
 }
 
-unsigned long start, diff;
-
-void loop() {
-  //  reset watchdog timer
-  __asm__ __volatile__ ("wdr"::);
-
-  start = millis();
-
-//  checkButton();
-  checkButtons();
-  checkBrightness();
-
+void updateLEDs() {
   if (on) {
     if (currentMode == COLOR) {
-      leds.fill(leds.ColorHSV(COLORS[currentColorHue], currentColorHue == NUM_COLOR_STEPS - 1 ? 0 : 255, 255));
+//      leds.fill(leds.ColorHSV(COLORS[currentColorHue], currentColorHue == NUM_COLOR_STEPS - 1 ? 0 : 255, 255));
     } else {
       if (currentMode == SPECTRUM) updateSpectrum();
       
@@ -408,13 +315,21 @@ void loop() {
   }
 
   leds.show();
+}
 
+void loop() {
+  //  reset watchdog timer
+  __asm__ __volatile__ ("wdr"::);
+
+  startTime = millis();
+
+  leds.setPixelColor(0, 255, 0, 0);
+
+  checkButtons();
+  updateLEDs();
   updateCycle();
 
-  diff = millis() - start;
-  if (currentMode == SPECTRUM) {
-    if (diff < 50) delay(50 - diff);
-  } else {
-    if (diff < 15) delay(15 - diff);
-  }
+  timeDiff = millis() - startTime;
+  uint8_t frameTime = currentMode == SPECTRUM ? 50 : 15;
+  if (timeDiff < frameTime) delay(frameTime - timeDiff);
 }
