@@ -1,5 +1,5 @@
+#include "ClickButton.h"
 #include <EEPROM.h>
-#include <Throttle.h>
 #include "TinyMegaI2CMaster.h"
 #include <tinyNeoPixel_Static.h>
 
@@ -9,18 +9,16 @@
 #define MODE_BUTTON_PIN PIN_PA2
 #define COLOR_BUTTON_PIN PIN_PA1
 
-Throttle powerButton = Throttle(POWER_BUTTON_PIN, INPUT_PULLUP);
-Throttle modeButton = Throttle(MODE_BUTTON_PIN, INPUT_PULLUP);
-Throttle colorButton = Throttle(COLOR_BUTTON_PIN, INPUT_PULLUP);
-
-#define BRIGHTNESS_PIN PIN_PA2
+ClickButton powerButton(POWER_BUTTON_PIN, LOW, true);
+ClickButton modeButton(MODE_BUTTON_PIN, LOW, true);
+ClickButton colorButton(COLOR_BUTTON_PIN, LOW, true);
 
 #define DEBUG false
 #define SERIAL_DEBUG true
 
 #define MAX_BRIGHTNESS 150
-#define NUM_PIXELS 9
-//#define NUM_PIXELS 51
+//#define NUM_PIXELS 9
+#define NUM_PIXELS 51
 //#define NUM_PIXELS 16
 
 #define SPECTRUM_MIN 70
@@ -29,6 +27,7 @@ Throttle colorButton = Throttle(COLOR_BUTTON_PIN, INPUT_PULLUP);
 #define EEPROM_MODE_ADDRESS 0 // uint8_t
 #define EEPROM_COLOR_ADDRESS 1 // uint8_t
 #define EEPROM_GRADIENT_ADDRESS 2 // uint8_t
+#define EEPROM_BRIGHTNESS_ADDRESS 3 // uint8_t
 
 byte pixels[NUM_PIXELS * 3];
 tinyNeoPixel leds = tinyNeoPixel(NUM_PIXELS, LED_PIN, NEO_GRB, pixels);
@@ -81,9 +80,14 @@ uint8_t spectrumMapping[16];
 uint16_t cycle = 0;
 uint8_t cycleCounter = 0;
 
-uint8_t brightness = 255;
+uint8_t brightness = MAX_BRIGHTNESS;
+uint8_t currentBrightness = 0;
 int brightnessSpeed = -1;
+uint8_t FADE_SPEED = 6;
 bool firstUpdate = true;
+
+// dumb hack to make sure that brightness fading works alright - the "clicks" value is being reset, so this keeps track of it
+int lastClick = 0;
 
 uint16_t avgDiff = SPECTRUM_THRESHOLD; // Instantly start spectrum 
 
@@ -95,12 +99,13 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   
   if (SERIAL_DEBUG) Serial.begin(19200);
-
+  if (SERIAL_DEBUG) Serial.println("Starting");
+  
   for (i = 0; i < 16; i++) {
     spectrum[i] = SPECTRUM_MIN;
   }
-
-  Serial.print("Spectrum Mapping: ");
+  
+//  if (SERIAL_DEBUG) Serial.print("Spectrum Mapping: ");
 
   // Generate mapping from spectrum index -> first led index (to help w/ blending between spectrum values)
   uint8_t lastIndex = -1;
@@ -111,13 +116,16 @@ void setup() {
       lastIndex = j;
       spectrumMapping[j] = i;
 
-      Serial.print(j);
-      Serial.print(": ");
-      Serial.print(i);
-      Serial.print(", ");
+//      if (SERIAL_DEBUG) {
+//        Serial.print(j);
+//        Serial.print(": ");
+//        Serial.print(i);
+//        Serial.print(", ");
+//      }
     }
   }
-  Serial.println();
+  
+//  if (SERIAL_DEBUG) Serial.println();
 
   COLORS[NUM_COLOR_STEPS - 1] = 0;
   for (i = 0; i < NUM_COLOR_STEPS - 1; i++) {
@@ -140,8 +148,6 @@ void setup() {
   leds.show();
   delay(300);
 
-  leds.setBrightness(min(MAX_BRIGHTNESS, brightness));
-
   EEPROM.get(EEPROM_MODE_ADDRESS, currentMode);
   if (currentMode == 255) currentMode = defaultMode;
   
@@ -150,6 +156,9 @@ void setup() {
   
   EEPROM.get(EEPROM_GRADIENT_ADDRESS, currentGradientIndex);
   if (currentGradientIndex == 255) currentGradientIndex = defaultGradientIndex;
+  
+  EEPROM.get(EEPROM_BRIGHTNESS_ADDRESS, brightness);
+  if (brightness > MAX_BRIGHTNESS) brightness = MAX_BRIGHTNESS;
   
   _PROTECTED_WRITE(WDT.CTRLA,WDT_PERIOD_512CLK_gc); //enable the WDT, with a 0.512s timeout (WARNING: delay > 0.5 will reset)
 }
@@ -205,25 +214,33 @@ void updateSpectrum() {
 }
 
 void handlePower() {
-  if (powerButton.rose() && powerButton.duration() < 500) {
+  if (powerButton.clicks == 1) {
     on = !on;
-  } else if (powerButton.rose()) {
-    leds.setPixelColor(0, 0, 255, 255);
-    // TODO: Save brightness to eeprom
-  } else if ((!digitalRead(POWER_BUTTON_PIN) || powerButton.fell()) && powerButton.duration() > 1500) {
-    leds.setPixelColor(0, 255, 255, 0);
+
+    lastClick = 1;
+  }
+    
+  if (powerButton.clicks < 0 || (powerButton.depressed == true && lastClick < 0)) {
+    if (powerButton.clicks < 0) lastClick = powerButton.clicks;
     
     brightness = constrain(brightness + brightnessSpeed, 0, MAX_BRIGHTNESS);
     if (brightness == 0 || brightness == MAX_BRIGHTNESS) brightnessSpeed *= -1;
-    
-    leds.setBrightness(min(MAX_BRIGHTNESS, brightness));
-  } else if (!digitalRead(POWER_BUTTON_PIN) || powerButton.fell()) {
-    leds.setPixelColor(0, 0, 0, 255);
+  } else {
+    // Only write to EEPROM when done holding down button to save writes
+    uint8_t tmpBrightness;
+    EEPROM.get(EEPROM_BRIGHTNESS_ADDRESS, tmpBrightness);
+
+    if (brightness != tmpBrightness) {
+      EEPROM.put(EEPROM_BRIGHTNESS_ADDRESS, brightness);
+    }
+
+    // Exit held state    
+    lastClick = 0;
   }
 }
 
 void handleMode() {
-  if (modeButton.fell()) {
+  if (modeButton.clicks == 1) {
     on = true;
     cycle = 0;
     currentMode = (currentMode + 1) % MODE_LENGTH;
@@ -233,7 +250,7 @@ void handleMode() {
 }
 
 void handleColor() {
-  if (colorButton.fell()) {
+  if (colorButton.clicks == 1) {
     on = true;
   
     if (currentMode == COLOR) {
@@ -247,9 +264,9 @@ void handleColor() {
 }
 
 void checkButtons() {
-  powerButton.update();
-  modeButton.update();
-  colorButton.update();
+  powerButton.Update();
+  modeButton.Update();
+  colorButton.Update();
 
   // Don't cause weird behavior on boot
   if (!firstUpdate) {
@@ -300,36 +317,34 @@ void updateColor(uint8_t i) {
 }
 
 void updateLEDs() {
-  if (on) {
-    if (currentMode == COLOR) {
-//      leds.fill(leds.ColorHSV(COLORS[currentColorHue], currentColorHue == NUM_COLOR_STEPS - 1 ? 0 : 255, 255));
-    } else {
-      if (currentMode == SPECTRUM) updateSpectrum();
-      
-      for (i = 0; i < NUM_PIXELS; i++) {
-        updateColor(i);
-      }
-    }
+  if (currentMode == COLOR) {
+    leds.fill(leds.ColorHSV(COLORS[currentColorHue], currentColorHue == NUM_COLOR_STEPS - 1 ? 0 : 255, 255));
   } else {
-    leds.fill(leds.Color(0, 0, 0));
+    if (currentMode == SPECTRUM) updateSpectrum();
+    
+    for (i = 0; i < NUM_PIXELS; i++) {
+      updateColor(i);
+    }
   }
 
   leds.show();
+
+  if (on && currentBrightness < brightness) currentBrightness = constrain(currentBrightness + FADE_SPEED, 0, MAX_BRIGHTNESS);
+  if ((on && currentBrightness > brightness) || !on) currentBrightness = constrain(currentBrightness - FADE_SPEED, 0, MAX_BRIGHTNESS);
+  
+  leds.setBrightness(min(MAX_BRIGHTNESS, currentBrightness));
 }
 
 void loop() {
   //  reset watchdog timer
   __asm__ __volatile__ ("wdr"::);
 
-  startTime = millis();
-
-  leds.setPixelColor(0, 255, 0, 0);
-
-  checkButtons();
-  updateLEDs();
-  updateCycle();
-
-  timeDiff = millis() - startTime;
   uint8_t frameTime = currentMode == SPECTRUM ? 50 : 15;
-  if (timeDiff < frameTime) delay(frameTime - timeDiff);
+  if (millis() - startTime >= frameTime) {
+    startTime = millis();
+  
+    checkButtons();
+    updateLEDs();
+    updateCycle(); 
+  }
 }
