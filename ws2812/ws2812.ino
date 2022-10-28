@@ -4,6 +4,7 @@
 #include <tinyNeoPixel_Static.h>
 
 #define LED_PIN PIN_PA6
+#define MOTION_PIN PIN_PA7
 
 #define POWER_BUTTON_PIN PIN_PA3
 #define MODE_BUTTON_PIN PIN_PA2
@@ -18,7 +19,7 @@ ClickButton colorButton(COLOR_BUTTON_PIN, LOW, true);
 
 #define MAX_BRIGHTNESS 150
 //#define NUM_PIXELS 9
-#define NUM_PIXELS 51
+#define NUM_PIXELS 50
 //#define NUM_PIXELS 16
 
 #define SPECTRUM_MIN 70
@@ -28,6 +29,8 @@ ClickButton colorButton(COLOR_BUTTON_PIN, LOW, true);
 #define EEPROM_COLOR_ADDRESS 1 // uint8_t
 #define EEPROM_GRADIENT_ADDRESS 2 // uint8_t
 #define EEPROM_BRIGHTNESS_ADDRESS 3 // uint8_t
+
+unsigned long MOTION_TIMEOUT = (unsigned long) 1000 * 60 * 20; // 20 minutes
 
 byte pixels[NUM_PIXELS * 3];
 tinyNeoPixel leds = tinyNeoPixel(NUM_PIXELS, LED_PIN, NEO_GRB, pixels);
@@ -39,7 +42,6 @@ const PROGMEM uint16_t GRADIENTS[] = {
   0, 255,  13107, 255,  26214, 255,  39321, 255,  52428, 255,  65535, 255, // Rainbow Bold
   0, 220,  13107, 220,  26214, 220,  39321, 220,  52428, 220,  65535, 220, // Rainbow Pastel
 
-  
   0, 240,  0,200,  3500,240,  8000,240,  3000,235,  0,220, // Autumn
   25300,255,  5461,210,  35239,246,  39028,245,  25300,255,  17000,220, // Beach
   0,255,  2556,255,  10362,245,  2500,240,  7000,225,  0,255, // Fire
@@ -47,7 +49,6 @@ const PROGMEM uint16_t GRADIENTS[] = {
   33495,235,  42816,225,  20000,220,  33495,235, 28000,245,  18000,210, // Ocean
   64045,224,  46902,230,  54612,180,  64045,240,  50000,245,  65000,250, // Pink
   58000,199,  29854,228,  7459,215,  62849,181,  43253,199, 30000,199, // Sorbet
-
 };
 
 #define NUM_COLOR_STEPS 11
@@ -63,7 +64,7 @@ enum Mode {
 };
 
 // Default mode and color values
-#define defaultMode COLOR
+#define defaultMode SPECTRUM
 #define defaultColorHue 0
 #define defaultGradientIndex 0
 
@@ -75,7 +76,6 @@ bool on = true;
 
 uint8_t i, j;
 uint8_t spectrum[16];
-uint8_t spectrumMapping[16];
 
 uint16_t cycle = 0;
 uint8_t cycleCounter = 0;
@@ -91,42 +91,24 @@ int lastClick = 0;
 
 uint16_t avgDiff = SPECTRUM_THRESHOLD; // Instantly start spectrum 
 
-unsigned long startTime, timeDiff;
+unsigned long startTime, timeDiff, motionTime;
 
 void setup() {
+  if (SERIAL_DEBUG) Serial.begin(19200);
+  if (SERIAL_DEBUG) Serial.println("Starting");
+  
   TinyMegaI2C.init();
   
   pinMode(LED_PIN, OUTPUT);
-  
-  if (SERIAL_DEBUG) Serial.begin(19200);
-  if (SERIAL_DEBUG) Serial.println("Starting");
+  pinMode(MOTION_PIN, INPUT);
+
+  attachInterrupt(MOTION_PIN, handleMotion, RISING);
+  motionTime = millis();
   
   for (i = 0; i < 16; i++) {
     spectrum[i] = SPECTRUM_MIN;
   }
   
-//  if (SERIAL_DEBUG) Serial.print("Spectrum Mapping: ");
-
-  // Generate mapping from spectrum index -> first led index (to help w/ blending between spectrum values)
-  uint8_t lastIndex = -1;
-  for (i = 0; i < NUM_PIXELS; i++) {
-    j = map(i, 0, NUM_PIXELS - 1, 0, 15);
-    
-    if (j != lastIndex) {
-      lastIndex = j;
-      spectrumMapping[j] = i;
-
-//      if (SERIAL_DEBUG) {
-//        Serial.print(j);
-//        Serial.print(": ");
-//        Serial.print(i);
-//        Serial.print(", ");
-//      }
-    }
-  }
-  
-//  if (SERIAL_DEBUG) Serial.println();
-
   COLORS[NUM_COLOR_STEPS - 1] = 0;
   for (i = 0; i < NUM_COLOR_STEPS - 1; i++) {
     COLORS[i] = map(i, 0, NUM_COLOR_STEPS - 1, 0, 65535);
@@ -172,7 +154,6 @@ void updateSpectrum() {
   uint8_t values[16];
 
   for (i = 0; i < 16; i++) {
-//    spectrum[i] = max(100, (spectrum[i] * oldValue + TinyMegaI2C.read() * newValue) / 1000);
     uint8_t rawValue = TinyMegaI2C.read();
     values[i] = rawValue;
 
@@ -203,24 +184,30 @@ void updateSpectrum() {
 
     spectrum[i] = max(SPECTRUM_MIN, mixFactor * final + (1 - mixFactor) * spectrum[i]);
 
-//    if (SERIAL_DEBUG) Serial.print(String(i) + ": " + String(spectrum[i]) + "\t");
-//    if (SERIAL_DEBUG) Serial.print(String(i) + ", " + String(readValue) + ", " + String(oldValue) + ", " + String(spectrum[i]) + "\t");
+    if (SERIAL_DEBUG) {
+//      Serial.print(String(i) + ", " + String(rawValue) + ", " + String(final) + ", " + String(spectrum[i]) + "\t");
+    }
   }
 
-//  if (SERIAL_DEBUG) Serial.println();
-//  Serial.println(average);
+  if (SERIAL_DEBUG) Serial.println();
 
   TinyMegaI2C.stop();
+}
+
+void handleMotion() {
+  motionTime = millis();
 }
 
 void handlePower() {
   if (powerButton.clicks == 1) {
     on = !on;
-
     lastClick = 1;
+    motionTime = millis();
   }
     
   if (powerButton.clicks < 0 || (powerButton.depressed == true && lastClick < 0)) {
+    motionTime = millis();
+    
     if (powerButton.clicks < 0) lastClick = powerButton.clicks;
     
     brightness = constrain(brightness + brightnessSpeed, 0, MAX_BRIGHTNESS);
@@ -242,6 +229,8 @@ void handlePower() {
 void handleMode() {
   if (modeButton.clicks == 1) {
     on = true;
+    motionTime = millis();
+    
     cycle = 0;
     currentMode = (currentMode + 1) % MODE_LENGTH;
     
@@ -252,6 +241,7 @@ void handleMode() {
 void handleColor() {
   if (colorButton.clicks == 1) {
     on = true;
+    motionTime = millis();
   
     if (currentMode == COLOR) {
       currentColorHue = (currentColorHue + 1) % NUM_COLOR_STEPS;
@@ -329,8 +319,10 @@ void updateLEDs() {
 
   leds.show();
 
-  if (on && currentBrightness < brightness) currentBrightness = constrain(currentBrightness + FADE_SPEED, 0, MAX_BRIGHTNESS);
-  if ((on && currentBrightness > brightness) || !on) currentBrightness = constrain(currentBrightness - FADE_SPEED, 0, MAX_BRIGHTNESS);
+  bool off = !on || (millis() - motionTime > MOTION_TIMEOUT);
+
+  if (!off && currentBrightness < brightness) currentBrightness = constrain(currentBrightness + FADE_SPEED, 0, MAX_BRIGHTNESS);
+  if (off || currentBrightness > brightness) currentBrightness = constrain(currentBrightness - FADE_SPEED, 0, MAX_BRIGHTNESS);
   
   leds.setBrightness(min(MAX_BRIGHTNESS, currentBrightness));
 }
